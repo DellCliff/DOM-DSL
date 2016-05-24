@@ -1,81 +1,96 @@
 package dellcliff.html.dom
 
 import scala.scalajs.js.Dynamic
-
+import scala.util.Try
 
 trait Attribute extends NodeOrAttribute {
-  def apply(element: Dynamic): Unit
-}
 
-case class StringAttribute
-(key: String, value: String) extends Attribute {
-  override def apply(element: Dynamic): Unit =
-    element.setAttribute(key, value)
-}
+  def apply(element: Dynamic): Try[Unit]
 
-case class StringListAttribute
-(key: String, value: Traversable[String]) extends Attribute {
-  override def apply(element: Dynamic): Unit =
-    element.setAttribute(key, value.mkString(" "))
-}
-
-case class FuncAttribute[A]
-(key: String, value: Any => A) extends Attribute {
-  override def apply(element: Dynamic): Unit =
-    element.asInstanceOf[Dynamic].updateDynamic(key)(value)
-}
-
-case class PartialFuncAttribute[A]
-(key: String, value: PartialFunction[Any, A]) extends Attribute {
-  override def apply(element: Dynamic): Unit = {
-    val o: PartialFunction[Any, _] = {
-      case other =>
-    }
-    element.asInstanceOf[Dynamic].updateDynamic(key)(value orElse o)
-  }
-}
-
-case class AttributeList
-(key: String, value: Traversable[StringAttribute]) extends Attribute {
-  override def apply(element: Dynamic): Unit = {
-    val en = element.asInstanceOf[Dynamic]
-    for (StringAttribute(k, v) <- value)
-      en.selectDynamic(key).updateDynamic(k)(v)
-  }
 }
 
 object Attribute {
 
+  sealed class StringOrAttribute[T]
+
+  object StringOrAttribute {
+
+    implicit object AttributeMember extends StringOrAttribute[Attribute]
+
+    implicit object StringMember extends StringOrAttribute[String]
+
+  }
+
   implicit class AttributeStringOps(val key: String) extends AnyVal {
-    def :=(value: String) = new StringAttribute(key, value)
 
-    def :=(value: String*) = new StringListAttribute(key, value)
+    def <=(value: Observable[String]) = new Attribute {
+      override def apply(element: Dynamic): Try[Unit] = Try {
+        value.addObserver(new Observer[String] {
+          override def onNext(x: String): Unit =
+            element.updateDynamic(key)(x)
+        })
+      }
+    }
 
-    def :=(value: PartialFunction[Any, _]) = new PartialFuncAttribute(key, value)
+    def <~(value: Observable[String]) = new Attribute {
+      override def apply(element: Dynamic): Try[Unit] = Try {
+        value.addObserver(new Observer[String] {
+          override def onNext(x: String): Unit =
+            element.setAttribute(key, x)
+        })
+      }
+    }
 
-    def :-(value: PartialFunction[Any, _]) = new PartialFuncAttribute(key, value)
+    def :~(value: String*) = new Attribute {
+      override def apply(element: Dynamic): Try[Unit] = Try {
+        element.setAttribute(key, value.mkString(" "))
+      }
+    }
 
-    def :=(value: Any => _) = new FuncAttribute(key, value)
+    def :=[T: StringOrAttribute](value: T*) = value.headOption match {
+      case None => new Attribute {
+        override def apply(props: Dynamic): Try[Unit] = Try {}
+      }
+      case Some(x: String) => new Attribute {
+        override def apply(props: Dynamic): Try[Unit] = Try {
+          props.updateDynamic(key)(value.mkString(" "))
+        }
+      }
+      case Some(x: Attribute) => new Attribute {
+        override def apply(props: scalajs.js.Dynamic): Try[Unit] = Try {
+          if (props.selectDynamic(key) == null || scalajs.js.isUndefined(props.selectDynamic(key)))
+            props.updateDynamic(key)(scalajs.js.Dynamic.literal())
+          for (vs <- value; v = vs.asInstanceOf[Attribute])
+            v.apply(props.selectDynamic(key))
+        }
+      }
+      case other => new Attribute {
+        override def apply(props: Dynamic): Try[Unit] = Try {}
+      }
+    }
 
-    def :=(value: () => _) = new FuncAttribute(key, { x: Any => value() })
+    def ->[A](value: PartialFunction[Any, A]) = new Attribute {
+      val o: PartialFunction[Any, _] = value orElse { case other => }
 
-    def :=(value: StringAttribute*) = new AttributeList(key, value)
+      override def apply(element: Dynamic): Try[Unit] = Try {
+        element.updateDynamic(key)(o)
+      }
+    }
+
   }
 
   implicit class AttributeSymbolOps(val key: Symbol) extends AnyVal {
-    def :=(value: String) = new StringAttribute(key.name, value)
 
-    def :=(value: String*) = new StringListAttribute(key.name, value)
+    def <=(value: Observable[String]) = key.name <= value
 
-    def :=(value: PartialFunction[Any, _]) = new PartialFuncAttribute(key.name, value)
+    def <~(value: Observable[String]) = key.name <~ value
 
-    def :-(value: PartialFunction[Any, _]) = new PartialFuncAttribute(key.name, value)
+    def :~(value: String*) = key.name :~ (value: _*)
 
-    def :=(value: Any => _) = new FuncAttribute(key.name, value)
+    def :=[T: StringOrAttribute](value: T*) = key.name := (value: _*)
 
-    def :=(value: () => _) = new FuncAttribute(key.name, { x: Any => value() })
+    def ->[A](value: PartialFunction[Any, A]) = key.name -> value
 
-    def :=(value: StringAttribute*) = new AttributeList(key.name, value)
   }
 
 }
